@@ -52,11 +52,24 @@ type TransferReq struct {
 /* RPC connection map cache */
 var connMap = make(map[string]*rpc.Client)
 
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+
 /*                    */
 /* Chord Node RPC API */
 /*                    */
 
-/* Get the predecessor ID of a remote node */
+/* 
+rpc remoteNode to get its immediate predecessor
+*/
 func GetPredecessorId_RPC(remoteNode *RemoteNode) (*RemoteNode, error) {
 	var reply IdReply
 	err := makeRemoteCall(remoteNode, "GetPredecessorId", RemoteId{remoteNode.Id}, &reply)
@@ -74,10 +87,14 @@ func GetPredecessorId_RPC(remoteNode *RemoteNode) (*RemoteNode, error) {
 	return rNode, err
 }
 
-/* Get the successor ID of a remote node */
+
+/* 
+rpc remoteNode to get its immediate successor 
+
+*/
 func GetSuccessorId_RPC(remoteNode *RemoteNode) (*RemoteNode, error) {
 	var reply IdReply
-	err := makeRemoteCall(remoteNode, "GetSuccessorId", RemoteId{remoteNode.Id}, &reply)
+	err := makeRemoteCall(remoteNode, "GetSuccessorId_Handler", RemoteId{remoteNode.Id}, &reply)
 	if err != nil {
 		return nil, err
 	}
@@ -87,13 +104,17 @@ func GetSuccessorId_RPC(remoteNode *RemoteNode) (*RemoteNode, error) {
 	return rNode, err
 }
 
+
+
+
+
 /* Notify a remote node that we believe we are its predecessor */
 func Notify_RPC(remoteNode, us *RemoteNode) error {
 	if remoteNode == nil {
 		return errors.New("RemoteNode is empty!")
 	}
 	var reply RpcOkay
-	err := makeRemoteCall(remoteNode, "Notify", us, &reply)
+	err := makeRemoteCall(remoteNode, "Notify_Handler", us, &reply)
 	if !reply.Ok {
 		return errors.New(fmt.Sprintf("RPC replied not valid from %v", remoteNode.Id))
 	}
@@ -101,19 +122,27 @@ func Notify_RPC(remoteNode, us *RemoteNode) error {
 	return err
 }
 
+
+
+
+
 /* Find the closest preceding finger from a remote node for an ID */
 func ClosestPrecedingFinger_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode, error) {
 	if remoteNode == nil {
 		return nil, errors.New("RemoteNode is empty!")
 	}
 	var reply IdReply
-	err := makeRemoteCall(remoteNode, "ClosestPrecedingFinger", RemoteQuery{remoteNode.Id, id}, &reply)
+	err := makeRemoteCall(remoteNode, "ClosestPrecedingFinger_Handler", RemoteQuery{remoteNode.Id, id}, &reply)
 
 	rNode := new(RemoteNode)
 	rNode.Id = reply.Id
 	rNode.Addr = reply.Addr
 	return rNode, err
 }
+
+
+
+
 
 /* Find the successor node of a given ID in the entire ring */
 func FindSuccessor_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode, error) {
@@ -121,13 +150,23 @@ func FindSuccessor_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode, error) {
 		return nil, errors.New("RemoteNode is empty!")
 	}
 	var reply IdReply
-	err := makeRemoteCall(remoteNode, "FindSuccessor", RemoteQuery{remoteNode.Id, id}, &reply)
+	err := makeRemoteCall(remoteNode, "FindSuccessor_Handler", RemoteQuery{remoteNode.Id, id}, &reply)
 
 	rNode := new(RemoteNode)
 	rNode.Id = reply.Id
 	rNode.Addr = reply.Addr
 	return rNode, err
 }
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
 
 /*                   */
 /* Datastore RPC API */
@@ -141,10 +180,14 @@ func Get_RPC(locNode *RemoteNode, key string) (string, error) {
 
 	var reply KeyValueReply
 	req := KeyValueReq{locNode.Id, key, ""}
-	err := makeRemoteCall(locNode, "GetLocal", &req, &reply)
+	err := makeRemoteCall(locNode, "GetLocal_Handler", &req, &reply)
 
 	return reply.Value, err
 }
+
+
+
+
 
 /* Put a key/value into a datastore on a remote node */
 func Put_RPC(locNode *RemoteNode, key string, value string) error {
@@ -154,10 +197,14 @@ func Put_RPC(locNode *RemoteNode, key string, value string) error {
 
 	var reply KeyValueReply
 	req := KeyValueReq{locNode.Id, key, value}
-	err := makeRemoteCall(locNode, "PutLocal", &req, &reply)
+	err := makeRemoteCall(locNode, "PutLocal_Handler", &req, &reply)
 
 	return err
 }
+
+
+
+
 
 /* Inform a successor node that we should now take care of IDs between (node.Id : predId] */
 /* This should trigger the successor node to transfer the relevant keys back to node      */
@@ -173,13 +220,23 @@ func TransferKeys_RPC(succ *RemoteNode, node *RemoteNode, predId []byte) error {
 	req.FromAddr = node.Addr
 	req.PredId = predId
 
-	err := makeRemoteCall(succ, "TransferKeys", &req, &reply)
+	err := makeRemoteCall(succ, "TransferKeys_Handler", &req, &reply)
 	if !reply.Ok {
 		fmt.Println(err)
 	}
 
 	return err
 }
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
 
 /* Helper function to make a call to a remote node */
 func makeRemoteCall(remoteNode *RemoteNode, method string, req interface{}, rsp interface{}) error {
