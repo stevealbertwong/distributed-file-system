@@ -11,16 +11,6 @@ import (
 	"fmt"
 )
 
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-
-
 /*                             */
 /* client level library / External API Into Datastore */
 /*                             */
@@ -42,16 +32,6 @@ func Put(node *Node, key string, value string) error {
 }
 
 
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-
-
 /* Internal helper method to find the appropriate node in the ring */
 func (node *Node) locate(key string) (*RemoteNode, error) {
 
@@ -59,29 +39,13 @@ func (node *Node) locate(key string) (*RemoteNode, error) {
 	object_id = HashKey(key)
 
 	// 2. successor of object_id == node that stores key
-	node = find_closest_successor(object_id)
+	node = FindSuccessor_RPC(object_id)
 
 	return node, nil
 }
 
 
 
-/* 
-When we discover a new predecessor we may need to transfer some keys to it 
-
-?? 
-
-*/
-func (node *Node) obtainNewKeys() error {
-	//TODO students should implement this method
-
-	TransferKeys_RPC(successor, )
-
-
-
-	return nil
-}
-
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -93,53 +57,55 @@ func (node *Node) obtainNewKeys() error {
 ////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////
 
-
-/*                                                         */
-/* RPCs to assist with interfacing with the datastore ring */
-/*                                                         */
-
-/* RPC */
-func (node *Node) GetLocal(req *KeyValueReq, reply *KeyValueReply) error {
-	if err := validateRpc(node, req.NodeId); err != nil {
-		return err
-	}
-
-	//TODO students should implement this method
-	return nil
-}
-
-/* RPC */
-func (node *Node) PutLocal(req *KeyValueReq, reply *KeyValueReply) error {
-	if err := validateRpc(node, req.NodeId); err != nil {
-		return err
-	}
-
-	//TODO students should implement this method
-	return nil
-}
-
-
-
-
-
-
-
-/* RPC
-??????
-
-this is handler ?? 
-
-*/
-func (node *Node) TransferKeys(req *TransferReq, reply *RpcOkay) error {
-	if err := validateRpc(node, req.NodeId); err != nil {
-		return err
-	}
-
-	//TODO students should implement this method
-	return nil
-}
 
 /* Print the contents of a node's data store */
 func PrintDataStore(node *Node) {
 	fmt.Printf("Node-%v datastore: %v\n", HashStr(node.Id), node.dataStore)
 }
+
+
+
+/* Creates a Chord node with a pre-defined ID (useful for testing) */
+func CreateDefinedNode(parent *RemoteNode, definedId []byte) (*Node, error) {
+	node := new(Node)
+	err := node.init(parent, definedId)
+	if err != nil {
+		return nil, err
+	}
+	return node, err
+}
+
+/* Create Chord node with random ID based on listener address */
+func CreateNode(parent *RemoteNode) (*Node, error) {
+	node := new(Node)
+	err := node.init(parent, nil)
+	if err != nil {
+		return nil, err
+	}
+	return node, err
+}
+
+
+/* Shutdown a specified Chord node (gracefully) */
+func ShutdownNode(node *Node) {
+	node.IsShutdown = true
+	// Wait for go routines to quit, should be enough time.
+	time.Sleep(time.Millisecond * 2000)
+	node.Listener.Close()
+
+	// 1. u() immediate predecessor's immediate successor n immediate successor's immediate predecessor
+	SetSuccessorId_RPC(node.Predecessor, node.Successor)
+	SetPredecessorId_RPC(node.Successor, node.Predecessor)
+
+	// 2. us as predecessor transfer ALL our data to our successor 
+	node.dsLock.Lock()
+	for k,v := range node.dataStore {
+		Put_RPC(node.succesor, k, v)
+		// 3. delete kv map
+		delete(node.dataStore, k)
+	}
+	node.dsLock.Unlock()
+	
+
+}
+

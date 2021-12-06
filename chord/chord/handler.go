@@ -6,6 +6,12 @@
 /*           function is called.                                             */
 /*                                                                           */
 
+/*
+receive, parse packets, return reply
+then call chord distributed algo 
+
+*/
+
 package chord
 
 import (
@@ -34,13 +40,14 @@ func validateRpc(node *Node, reqId []byte) error {
 ////////////////////////////////////////////////////////////////////////////////////////
 
 /* 
-RPC receiving end handler 
+RPC handler 
 
 1. parse req
 2. return reply
 */
 func (node *Node) GetPredecessorId_Handler(req *RemoteId, reply *IdReply) error {
 	if err := validateRpc(node, req.Id); err != nil {
+		reply.Ok = false
 		return err
 	}
 	// Predecessor may be nil, which is okay.
@@ -68,6 +75,7 @@ return immedaite successor
 */
 func (node *Node) GetSuccessorId_Handler(req *RemoteId, reply *IdReply) error {
 	if err := validateRpc(node, req.Id); err != nil {
+		reply.Ok = false
 		return err
 	}
 	if node.Successor == nil {
@@ -83,19 +91,73 @@ func (node *Node) GetSuccessorId_Handler(req *RemoteId, reply *IdReply) error {
 }
 
 
-/* 
-RPC receiving end handler 
-
-1. parse req
-2. return reply
-*/
-func (node *Node) Notify_Handler(remoteNode *RemoteNode, reply *RpcOkay) error {
-	//TODO students should implement this method
-
-	
+func (node *Node) SetPredecessorId(req *UpdateReq, reply *RpcOkay) error {
+	if err := validateRpc(node, req.FromId); err != nil {
+		reply.Ok = false
+		return err
+	}
+	node.Predecessor.Id = req.UpdateId
+	node.Predecessor.Addr = req.UpdateAddr
+	reply.Ok = true
 	return nil
 }
 
+
+func (node *Node) SetSuccessorId(req *UpdateReq, reply *RpcOkay) error {
+	if err := validateRpc(node, req.FromId); err != nil {
+		reply.Ok = false
+		return err
+	}
+	node.Successor.Id = req.UpdateId
+	node.Successor.Addr = req.UpdateAddr
+	reply.Ok = true
+	return nil
+}
+
+
+func (node *Node) Notify_Handler(req *NotifyReq, reply *RpcOkay) error {
+	if err := validateRpc(node, query.FromId); err != nil {
+		reply.Ok = false
+		return err
+	}
+
+	predecessor := new(RemoteNode)
+	predecessor.Id = req.UpdateId
+	predecessor.Addr = req.UpdateAddr
+	node.notify(predecessor) // handler implementation 
+	reply.Ok = true
+
+	return nil
+}
+
+
+/* 
+RPC handler
+
+successor transfer data to predecessor 
+
+1. loop thru kv map to find data belongs to predecessor 
+2. rpc data to successor
+3. delete from kv map 
+
+*/
+func (node *Node) TransferKeys_Handler(req *TransferReq, reply *RpcOkay) error {
+	if err := validateRpc(node, req.NodeId); err != nil {
+		reply.Ok = false
+		return err
+	}
+	for k,v := range node.dataStore{
+		hashed_key := HashKey(k)
+		if BetweenRightIncl(hashed_key, req.PredId, req.FromId){ // FromId == successor 
+			Put_RPC(req.PredId, k, v)
+			delete(node.dataStore, k)
+		}
+	}
+	
+	reply.Ok = true
+
+	return nil
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -112,7 +174,7 @@ for get(key) n new_node.join()
 */
 
 /* 
-RPC receiving end handler (runs on local node)
+RPC handler
 
 1. parse req
 2. recursion: find the 1st successor of local finger table 
@@ -120,6 +182,7 @@ RPC receiving end handler (runs on local node)
 */
 func (node *Node) FindSuccessor_Handler(query *RemoteQuery, reply *IdReply) error {
 	if err := validateRpc(node, query.FromId); err != nil {
+		reply.Ok = false
 		return err
 	}
 	// check break condition, if not then recurse again
@@ -139,30 +202,27 @@ func (node *Node) FindSuccessor_Handler(query *RemoteQuery, reply *IdReply) erro
 
 
 /* 
-RPC receiving end handler (runs on local node)
+RPC handler
 
-from down to up loop thru local finger table 
--> closest entry ("start" just smaller than "id", while "successor" is bigger)
-
-
+from down to up loop thru finger table 
+-> return biggest successor that is smaller than new node 
 
 1. parse req
 2. return reply
 */
 func (node *Node) ClosestPrecedingFinger_Handler(query *RemoteQuery, reply *IdReply) error {
 	if err := validateRpc(node, query.FromId); err != nil {
+		reply.Ok = false
 		return err
 	}
 	
-	int current_node_id = node.id
-	for (i = KEY_LENGTH, i > 0 , i--) {
-		if(node.FingerTable[i].Node.id < query.id  && node.FingerTable[i].Node.id >= current_node_id ){
-			// found succusser node that is new node's closest predecessor 
-			if node.Predecessor == nil {
+	for (i = KEY_LENGTH, i > 0 , i--) {		
+		if BetweenRightIncl(node.FingerTable[i].Node.Id, node.Id, query.Id) {
+			if node.Predecessor == nil { // found new node's closest predecessor 
 				reply.Id = nil
 				reply.Addr = ""
 				reply.Valid = false
-			} else {
+			} else { // biggest successor node that is smaller than new node == NOT closest predecessor 
 				reply.Id = node.FingerTable[i].Node.id 
 				reply.Addr = node.FingerTable[i].Node.Addr
 				reply.Valid = true

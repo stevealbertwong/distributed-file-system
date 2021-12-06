@@ -1,9 +1,8 @@
-/*                                                                           */
-/*  Brown University, CS138, Spring 2015                                     */
-/*                                                                           */
-/*  Purpose: Chord struct and related functions to create new nodes, etc.    */
-/*                                                                           */
+/*
+Brown University, CS138
 
+chord distributed algo implementation
+*/
 package chord
 
 import (
@@ -22,6 +21,12 @@ const KEY_LENGTH = 8
 // Turn debug-mode printing on/off
 const DEBUG = false
 
+/* A single finger table entry */
+type FingerEntry struct {
+	Start []byte       /* ID hash of (n + 2^i) mod (2^m)  */
+	Node  *RemoteNode  /* RemoteNode that Start points to */
+}
+
 /* Non-local node representation */
 type RemoteNode struct {
 	Id   []byte
@@ -30,7 +35,6 @@ type RemoteNode struct {
 
 /* 
 Local node representation 
-
 chord server's major struct 
 */
 type Node struct {
@@ -57,96 +61,59 @@ type Node struct {
 ////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////
 
-/* Creates a Chord node with a pre-defined ID (useful for testing) */
-func CreateDefinedNode(parent *RemoteNode, definedId []byte) (*Node, error) {
-	node := new(Node)
-	err := node.init(parent, definedId)
-	if err != nil {
-		return nil, err
-	}
-	return node, err
-}
+/*
+creating and shutting down nodes
 
-/* Create Chord node with random ID based on listener address */
-func CreateNode(parent *RemoteNode) (*Node, error) {
-	node := new(Node)
-	err := node.init(parent, nil)
-	if err != nil {
-		return nil, err
-	}
-	return node, err
-}
+*/
 
 
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
+/* 
 
-
-/* Initailize a Chord node, start listener, rpc server, and go routines */
+Initailize a Chord node, start listener, rpc server, and go routines 
+*/
 func (node *Node) init(parent *RemoteNode, definedId []byte) error {
 	if KEY_LENGTH > 128 || KEY_LENGTH%8 != 0 {
 		log.Fatal(fmt.Sprintf("KEY_LENGTH of %v is not supported! Must be <= 128 and divisible by 8", KEY_LENGTH))
 	}
 
+	// 1. init chord node 
 	listener, _, err := cs138.OpenListener()
 	if err != nil {
 		return err
 	}
-
 	node.Id = HashKey(listener.Addr().String())
 	if definedId != nil {
 		node.Id = definedId
 	}
-
 	node.Listener = listener
 	node.Addr = listener.Addr().String()
 	node.IsShutdown = false
 	node.dataStore = make(map[string]string)
-
-	// Populate RemoteNode that points to self
-	node.RemoteSelf = new(RemoteNode)
+	node.RemoteSelf = new(RemoteNode) // RemoteNode that points to yourself
 	node.RemoteSelf.Id = node.Id
-	node.RemoteSelf.Addr = node.Addr
-
-	// Join this node to the same chord ring as parent
-	err = node.join(parent)
+	node.RemoteSelf.Addr = node.Addr	
+	err = node.join(parent) // "join" packet == Join this node to the same chord ring as parent
 	if err != nil {
 		return err
 	}
-
-	// Populate finger table
 	node.initFingerTable()
 
-	// Thread 1: start RPC server on this connection
+	// 2. 3 threads == all run periodically 
+	// Thread 1: listening for all types of incoming packets 
 	rpc.RegisterName(node.Addr, node)
 	go node.startRpcServer()
 
-	// Thread 2: kick off timer to stabilize periodically
-	ticker1 := time.NewTicker(time.Millisecond * 100) //freq
+	// Thread 2: "stabilize/notify" packet == fresh immediate predecessor n successor 
+	ticker1 := time.NewTicker(time.Millisecond * 100)
 	go node.stabilize(ticker1)
 
-	// Thread 3: kick off timer to fix finger table periodically
-	ticker2 := time.NewTicker(time.Millisecond * 90) //freq
+	// Thread 3: "find immediate successor for every entry" packet == fresh finger table
+	ticker2 := time.NewTicker(time.Millisecond * 90)
 	go node.fixNextFinger(ticker2)
 
 	return err
 }
 
-
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
 
 /* Go routine to accept and process RPC requests */
 func (node *Node) startRpcServer() {
@@ -163,16 +130,152 @@ func (node *Node) startRpcServer() {
 	}
 }
 
-/* Shutdown a specified Chord node (gracefully) */
-func ShutdownNode(node *Node) {
-	node.IsShutdown = true
-	// Wait for go routines to quit, should be enough time.
-	time.Sleep(time.Millisecond * 2000)
-	node.Listener.Close()
 
-	//TODO students should modify this method to gracefully shutdown a node
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
 
+
+func (node *Node) initFingerTable() {
+	
+	node.FingerTable = make([]FingerEntry, KEY_LENGTH) 
+
+	// all entries init to point to itself
+	for (i = 1, i < KEY_LENGTH, i++) {
+		node.ftLock.Lock()
+		node.FingerTable[i].Start = fingerMath(id, i, KEY_LENGTH)
+		node.FingerTable[i].Node = node.RemoteSelf
+		node.ftLock.Unlock()
+	}
+	node.Successor = node.RemoteSelf
+	
 }
+
+
+/* 
+periodically update finger table entries to keep it always fresh
+
+1. compute 1st column "start" in finger table
+2. rpc recursion to find successor node for key "start"
+3. fill 3rd column "successor" in finger table
+
+*/
+func (node *Node) fixNextFinger(ticker *time.Ticker) {
+
+	for _ = range ticker.C {
+		// 1. find every finger table entry's successor node
+		for (i = 1, i < KEY_LENGTH, i++) {
+			// 1.1 optimized: if start smaller than previous entry's successor
+			// 2 table entries share same successor == no need to rpc
+			if ( node.FingerTable[i].Start < node.FingerTable[i-1].node )
+				pass 
+
+			// 1.2 normal case: recursively
+			else: 
+				node.ftLock.Lock()
+				node.FingerTable[i].Start = fingerMath(id, i, KEY_LENGTH)
+				node.FingerTable[i].Node = FindSuccessor_RPC(node.FingerTable[i].Start)
+				node.ftLock.Unlock()	
+		}
+	}
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+/*
+Thread 2: Psuedocode from figure 7 of chord paper
+
+runs on every node peridically:
+
+1. check if there is new node, if yes update new node as my new immediate successor
+2. notify successor (might or might not be new node) to transfer my data to me predecessor
+
+NOTE:
+- stabilize == notify
+- notify == being stabilized == "stabilize" packets handler 
+*/
+func (node *Node) stabilize(ticker *time.Ticker) {
+	for _ = range ticker.C {
+		if node.IsShutdown {
+			fmt.Printf("[%v-stabilize] Shutting down stabilize timer\n", HashStr(node.Id))
+			ticker.Stop()
+			return
+		}
+
+		// 1. check if there is new node, if yes update new node as my new immediate successor
+		// i ask my immediate successor for its immediate predecessor to see if its still me
+		// my_successor_predecessor == might be new node in btwn me n my successor == my new successor 
+		my_successor_predecessor, err := GetPredecessorId_RPC(node.Successor)
+		if err != nil {
+			log.Fatal("stabilize() GetPredecessorId_RPC() error: " + err.Error())
+		}
+			
+		if(BetweenRightIncl(my_successor_predecessor.Id, node.Id, node.Successor.Id) 
+				&& my_successor_predecessor != nil){
+			node.ftLock.Lock()
+			node.successor = my_successor_predecessor
+			node.FingerTable[0].Node = my_successor_predecessor
+			node.ftLock.Unlock()
+		}
+		
+		// 2. notify successor (might or might not be new node) to transfer my data to me predecessor
+		// if there is NO successor == nothing 
+		// if YES successor but NOT new node == transfer data 
+		// if YES successor and YES new node == transfer data + "i am your father"
+		if !EqualIds(node.Successor.Id, node.Id) { // if you are your own successor, do not notify yourself
+			Notify_RPC(node.successor, node.id)
+		}
+	}
+}
+
+
+/*
+implementation of handler: 
+successor being asked by predecessor to transfer data
+
+scenario 1: new node notified by original predecessor == new node -> original predecessor (dataflow)
+scenario 2: original succesor notified by new node == original succesor -> new node
+
+1. update predecessor remote node to be my new predecessor (if we are new node successor)
+2. we as successor transfer predecessor data belongs to him (successor -> predecessor)
+
+
+shouldn't new node ask your successor for data when joining ??
+not predecessor when stabilizing ?? 
+
+remoteNode == original predecessor or new node 
+*/
+func (node *Node) notify(new_predecessor *RemoteNode) {
+
+	// 1. update predecessor remote node to be my new predecessor (if we are new node successor)
+	// - if predecessor who sent me this is in between me and my existing predecessor 
+	// - or i dont even have a predecessor
+	if( Between(predecessor.id, node.predecessor, node.id) || node.predecessor == nil {
+		node.predecessor = new_predecessor		
+	}
+	
+	// 2. we as successor transfer predecessor data belongs to him (successor -> predecessor)
+	TransferKeys_RPC(node.RemoteSelf, new_predecessor)
+}
+
+
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -188,142 +291,80 @@ func ShutdownNode(node *Node) {
 /*
 chord paper figure 6
 
-this node trying to join remote node's existing ring
+when new node first join an existing ring 
+only need any random node to hop its his finger table to find immediate successor 
 
-
-
+NOTE:
+- when a new node join, it only needs to find its immediate successor 
+	- only need successor to start "stabilize" 
+	- could have empty finger table, empty predecessor, empty data 
+- then uses "stabilize" + "notify" + "fixNextFinger" to seed its predecessor + data + finger table
 */
-func (node *Node) join(other *RemoteNode) error {
+func (node *Node) join(random_node *RemoteNode) error {
 
-	// there is an existing ring 
-	if (other) 
-		// 1. init your own finger table 
-		initFingerTable(node)
-		
-		// 2. update predecessors to see if new node is their new successor 
-		update_others()
-
-
-	// you are the only node 
-	else
-		// 3. all table entries are just yourself
-		for (i = 1, i < KEY_LENGTH, i++) {
-			node.FingerTable[0].Node.Id = node.Id 
-			node.FingerTable[0].Node.Addr = node.Addr
-		}
-		
-		node.predecessor.Id = node.Id 
-		node.predecessor.Node.Addr = node.Addr
 	
-	return nil	
-}
-
-
-func (node *Node) update_others(){
-	int new_node_id = node.id 
-	for (i = 1, i < KEY_LENGTH, i++) {
-		Node p = find_predecessor(new_node_id - 2^(i-1)); // ??	
-		p.update_finger_table(new_node_id, i)
-	}
-}
-
-
-func (node *Node) update_finger_table(int new_node_id , int entry_index){
-	int current_node_id = node.id
-	
-	// if new node is new successor
-	if( new_node_id < node.FingerTable[entry_index] && new_node_id > current_node_id){
-		node.FingerTable[entry_index].Id = new_node_id
+	if (random_node) // there is any random node in an existing ring 
+		// 1. ask any random node to hop its his finger table to find new node's immediate successor 
+		succ, err := FindSuccessor_RPC(random_node, node.Id)
 		
-		// new node could be current node's predecessor's new successor
-		Node p = node.predecessor
-		p.update_finger_table(new_node_id, entry_index) 
-	}
+		// 2. u() new node's immediate successor 
+		node.ftLock.Lock()
+		node.Successor = succ
+		node.FingerTable[0].Node = succ
+		node.ftLock.Unlock()
+
+	else // you are the only node 
+		return nil 
+
+		// // 1. init your own finger table 
+		// initFingerTable(node)
+
+		// // 2. update predecessors to see if new node is their new successor 
+		// update_others()
+
+		// // 3. all table entries are just yourself
+		// for (i = 1, i < KEY_LENGTH, i++) {
+		// 	node.FingerTable[0].Node.Id = node.Id 
+		// 	node.FingerTable[0].Node.Addr = node.Addr
+		// }
+		
+		// node.predecessor.Id = node.Id 
+		// node.predecessor.Node.Addr = node.Addr
 	
 }
 
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
 
-/*
-Thread 2: Psuedocode from figure 7 of chord paper
-(runs on client node)
+// func (node *Node) update_others(){
+// 	int new_node_id = node.id 
+// 	for (i = 1, i < KEY_LENGTH, i++) {
+// 		Node p = find_predecessor(new_node_id - 2^(i-1)); // ??	
+// 		p.update_finger_table(new_node_id, i)
+// 	}
+// }
 
-stabilization == ensures immediate successor n predecessor of every node is accurate 
 
-immediate predecessor asks immediate successor for its predecessor 
-to see if there's new node between them
-
-*/
-func (node *Node) stabilize(ticker *time.Ticker) {
-	for _ = range ticker.C {
-		if node.IsShutdown {
-			fmt.Printf("[%v-stabilize] Shutting down stabilize timer\n", HashStr(node.Id))
-			ticker.Stop()
-			return
-		}
-
-		// 1. i ask my immediate successor for its immediate predecessor to see if its still me
-		// my_successor_predecessor == might be new node in btwn me n my successor == my new successor 
-		my_successor_predecessor, err := GetPredecessorId_RPC(node.Successor)
-		if err != nil {
-			log.Fatal("stabilize() GetPredecessorId_RPC() error: " + err.Error())
-		}
-
-		// 2. if my immediate successor there is new node, its predecessor is no longer you
-		// then new node is your new successor
-		int current_node_id = node.id
-		if(my_successor_predecessor > my_successor && my_successor_predecessor < current_node_id){
-			node.successor = my_successor_predecessor
-			node.FingerTable[0].Node = my_successor_predecessor
-		}
+// func (node *Node) update_finger_table(int new_node_id , int entry_index){
+// 	int current_node_id = node.id
+	
+// 	// if new node is new successor
+// 	if( new_node_id < node.FingerTable[entry_index] && new_node_id > current_node_id){
+// 		node.FingerTable[entry_index].Id = new_node_id
 		
-		// 3. notify new node "i am your father"
-		// notify my new successor i am its new predecessor		
-		if !EqualIds(node.Successor.Id, node.Id) { // if you are your own successor, do not notify yourself
-			node.Successor.notify(current_node_id)
-		}
-	}
-}
+// 		// new node could be current node's predecessor's new successor
+// 		Node p = node.predecessor
+// 		p.update_finger_table(new_node_id, entry_index) 
+// 	}
+	
+// }
 
-// update remoteNode to be my new predecessor 
-func (node *Node) notify(remoteNode *RemoteNode) {
-
-	int current_node_id = node.id
-	// if remoteNode is in between me and my predecessor
-	if( remoteNode.id > current_node_id && remoteNode.id < node.predecessor ) or node.predecessor == NULL {
-		node.predecessor = remoteNode
-	}
-}
-
-
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
 
 
 /*
 Psuedocode from figure 4 of chord paper
 
+runs on multiple nodes 
 
-Q: can there be overshoot if hopping finger table ??
-A: yes finger table might not be most updated, eventual consistency 
-   "start" is diff in diff nodes, and thus its successor node
 
-Q: what if overshoots so much that predecessor's sucessor is still new node's predecessor ??
-A: it will hop clockwise back node by node, thru immediate successor 
-   so as long as immediate successor is accurate, can reach real successor 
 
 id == new node id / object id
 node == any random node 
@@ -331,29 +372,38 @@ n == best guess of predecessor node e.g. random node 's best guess of predecesso
 
 intuition:
 - recursively hopping finger tables via succusser nodes to look for closest predecessor to new node
-- new node's successor == new node's predecessor's successor 
+- by looking at the biggest successor node that is smaller than new node
+- keeps hopping as long as ANY successor is still smaller than new node
+- until hit "closest predecessor node" itself smaller than new node, BUT ALL successors are bigger than new node
+	- this is true as long as all finger table entries' successor is correct 
+	- with stablization, "eventually" all entries will be correct, just not at all time
+- new node's closest predecessor's immediate successor == new node's immediate successor
 
-chord paper's example: 
-- node 6 starts at any arbitrary node, recursively hop its biggest successors
-- keeps hopping where biggest successors is still smaller than node 6 
-- til hit node 3 whose biggest successors 0 is just bigger than node 6 
-- node 3's finger table == where every entry's successor is 0, bigger than 6
-- i.e. node 3 is node 6's closest predecessor 
-- i.e. node 6 is in btwn node 0 n 3 
+chord paper figure 5a example: 
+- new node 6 wants to join 
+- 6 starts at node 0 or node 1, both table's biggest successor that is smaller than 6 is node 3
+- hop to node 3 
+- node 3 itself smaller than node 6, but all successors (all 0) are bigger than node 6
+- node 3 == node 6's closest predecessor
+- node 3's immediate successor node 0 == node 6's immediate successor
+- just to verify node 6 is in btwn node 0 n 3 
 
-chord paper figure 5a: when node 6 joins, random node == node 1 
-== recursively hop from node 1 -> node 0 -> node 3
+TLDR: when node 6 joins, random node == node 0, recursively hop from node 0 -> node 3
+TLDR: when node 6 joins, random node == node 1, recursively hop from node 1 -> node 3
+
 */
 func (node *Node) find_closest_successor(id []byte) (*RemoteNode, error) {
 	
 	// 1. break condition of distributed recursion -> 
-	// this runs on immediate_predecessor node
+	// this condition is true only on immediate_predecessor node
 	if BetweenRightIncl(id, node.Id, node.Successor.Id) ||
 		EqualIds(node.Successor.Id, node.Id) {
+
+		// immediate_predecessor's old immediate_successor == new node's successor	
 		return node.Successor, nil
 	}
 
-	// 2. recursively hop finger table until just overshoots
+	// 2. recursively hop finger table
 	// this runs on client node
 	immediate_predecessor = node.find_closest_predecessor(id)
 
@@ -365,23 +415,29 @@ func (node *Node) find_closest_successor(id []byte) (*RemoteNode, error) {
 }
 
 /*
-runs on client node 
+runs on client node ONLY
+"hopping" is done thru only rpc calls 
+
+recursively hop finger tables as long as any of its successor is smaller than new node / object id
+
 
 confusing name == since hopping successors to find new node's closest predecessor
 id == new node id / object id
 */
 func (node *Node) find_closest_predecessor(id []byte) (*RemoteNode, error) {
 	
-	int current_node_id = node.id
-	immediate_succesor, err := GetSuccessorId_RPC(current_node_id)
+	// maybe random starting node happens to be 
+	int hopped_node_id = node.id
+	immediate_succesor, err := GetSuccessorId_RPC(hopped_node_id)
 
-	// break when target id == current node's immediate successor 
-	// then current node == closest_predecessor
-	while( !Between(id, current_node_id, immediate_succesor.Id) && !EqualIds(current_node_id, immediate_succesor.Id)){
-		current_node_id, err = ClosestPrecedingFinger_RPC(current_node_id, id)
-		immediate_succesor, err := GetSuccessorId_RPC(current_node_id)
+	// TEST: if ANY of hopped node's successor is smaller than new node, hopped node is NOT closest_predecessor
+	// BREAK: if hopped node's immediate(smallest) successor is bigger than new node
+	// == hopped node is closest_predecessor == NONE of hopped node's successor is smaller than new node
+	while( !Between(id, hopped_node_id, immediate_succesor.Id) && !EqualIds(hopped_node_id, immediate_succesor.Id)){
+		hopped_node_id, err = ClosestPrecedingFinger_RPC(hopped_node_id, id)
+		immediate_succesor, err := GetSuccessorId_RPC(hopped_node_id)
 	}
-	return current_node_id // found new node's closest predecessor
+	return hopped_node_id // found new node's closest predecessor
 }
 
 

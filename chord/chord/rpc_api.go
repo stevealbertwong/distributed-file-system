@@ -3,7 +3,6 @@
 /*                                                                           */
 /*  Purpose: RPC API used to communicate with other nodes in the Chord ring. */
 /*                                                                           */
-
 package chord
 
 import (
@@ -53,6 +52,47 @@ type TransferReq struct {
 var connMap = make(map[string]*rpc.Client)
 
 
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+
+/*
+public datastore rpc APIs
+
+*/
+/* Get a value from a remote node's datastore for a given key */
+func Get_RPC(locNode *RemoteNode, key string) (string, error) {
+	if locNode == nil {
+		return "", errors.New("RemoteNode is empty!")
+	}
+
+	var reply KeyValueReply
+	req := KeyValueReq{locNode.Id, key, ""}
+	err := makeRemoteCall(locNode, "GetLocal_Handler", &req, &reply)
+
+	return reply.Value, err
+}
+
+
+
+/* Put a key/value into a datastore on a remote node */
+func Put_RPC(locNode *RemoteNode, key string, value string) error {
+	if locNode == nil {
+		return errors.New("RemoteNode is empty!")
+	}
+
+	var reply KeyValueReply
+	req := KeyValueReq{locNode.Id, key, value}
+	err := makeRemoteCall(locNode, "PutLocal_Handler", &req, &reply)
+
+	return err
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -63,20 +103,20 @@ var connMap = make(map[string]*rpc.Client)
 ////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////
 
-/*                    */
-/* Chord Node RPC API */
-/*                    */
+/*
+private chord rpc APIs
+
+*/
 
 /* 
 rpc remoteNode to get its immediate predecessor
 */
 func GetPredecessorId_RPC(remoteNode *RemoteNode) (*RemoteNode, error) {
 	var reply IdReply
-	err := makeRemoteCall(remoteNode, "GetPredecessorId", RemoteId{remoteNode.Id}, &reply)
+	err := makeRemoteCall(remoteNode, "GetPredecessorId_Handler", RemoteId{remoteNode.Id}, &reply)
 	if err != nil {
 		return nil, err
 	}
-
 	if !reply.Valid {
 		return nil, err
 	}
@@ -107,25 +147,6 @@ func GetSuccessorId_RPC(remoteNode *RemoteNode) (*RemoteNode, error) {
 
 
 
-
-/* Notify a remote node that we believe we are its predecessor */
-func Notify_RPC(remoteNode, us *RemoteNode) error {
-	if remoteNode == nil {
-		return errors.New("RemoteNode is empty!")
-	}
-	var reply RpcOkay
-	err := makeRemoteCall(remoteNode, "Notify_Handler", us, &reply)
-	if !reply.Ok {
-		return errors.New(fmt.Sprintf("RPC replied not valid from %v", remoteNode.Id))
-	}
-
-	return err
-}
-
-
-
-
-
 /* Find the closest preceding finger from a remote node for an ID */
 func ClosestPrecedingFinger_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode, error) {
 	if remoteNode == nil {
@@ -142,9 +163,13 @@ func ClosestPrecedingFinger_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode,
 
 
 
+/* 
+recursively hop finger tables find the successor node of a given ID 
+TEST: highest successor node in finger table that is smaller than new node id 
 
-
-/* Find the successor node of a given ID in the entire ring */
+remoteNode == random starting node == dest node this rpc sends to 
+id == new node id 
+*/
 func FindSuccessor_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode, error) {
 	if remoteNode == nil {
 		return nil, errors.New("RemoteNode is empty!")
@@ -159,50 +184,21 @@ func FindSuccessor_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode, error) {
 }
 
 
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
-
-/*                   */
-/* Datastore RPC API */
-/*                   */
-
-/* Get a value from a remote node's datastore for a given key */
-func Get_RPC(locNode *RemoteNode, key string) (string, error) {
-	if locNode == nil {
-		return "", errors.New("RemoteNode is empty!")
-	}
-
-	var reply KeyValueReply
-	req := KeyValueReq{locNode.Id, key, ""}
-	err := makeRemoteCall(locNode, "GetLocal_Handler", &req, &reply)
-
-	return reply.Value, err
-}
 
 
-
-
-
-/* Put a key/value into a datastore on a remote node */
-func Put_RPC(locNode *RemoteNode, key string, value string) error {
-	if locNode == nil {
+/* Notify a remote node that we believe we are its predecessor */
+func Notify_RPC(remoteNode, us *RemoteNode) error {
+	if remoteNode == nil {
 		return errors.New("RemoteNode is empty!")
 	}
-
-	var reply KeyValueReply
-	req := KeyValueReq{locNode.Id, key, value}
-	err := makeRemoteCall(locNode, "PutLocal_Handler", &req, &reply)
+	var reply RpcOkay
+	err := makeRemoteCall(remoteNode, "Notify_Handler", us, &reply)
+	if !reply.Ok {
+		return errors.New(fmt.Sprintf("RPC replied not valid from %v", remoteNode.Id))
+	}
 
 	return err
 }
-
-
 
 
 
