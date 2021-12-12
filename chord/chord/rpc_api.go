@@ -168,7 +168,7 @@ recursively hop finger tables find the successor node of a given ID
 TEST: highest successor node in finger table that is smaller than new node id 
 
 remoteNode == random starting node == dest node this rpc sends to 
-id == new node id 
+id == sending node's id 
 */
 func FindSuccessor_RPC(remoteNode *RemoteNode, id []byte) (*RemoteNode, error) {
 	if remoteNode == nil {
@@ -211,10 +211,10 @@ func TransferKeys_RPC(succ *RemoteNode, node *RemoteNode, predId []byte) error {
 	var reply RpcOkay
 
 	var req TransferReq
-	req.NodeId = succ.Id
-	req.FromId = node.Id
-	req.FromAddr = node.Addr
-	req.PredId = predId
+	req.NodeId = succ.Id // where to rpc to (successor)
+	req.FromId = node.Id // where is the rpc from (successor)
+	req.FromAddr = node.Addr // where is the rpc from (successor)
+	req.PredId = predId // where to send data to (predecessor)
 
 	err := makeRemoteCall(succ, "TransferKeys_Handler", &req, &reply)
 	if !reply.Ok {

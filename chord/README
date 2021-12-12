@@ -1,0 +1,8 @@
+to run: 
+
+
+
+https://stackoverflow.com/questions/52123627/how-do-i-resolve-cannot-find-module-for-path-x-importing-a-local-go-module 
+
+cd "~/Desktop/GITHUB_PERSONAL_PROJECT/distributed-file-system/chord"
+GO111MODULE=off go run cli.go

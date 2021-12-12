@@ -134,7 +134,7 @@ func (node *Node) Notify_Handler(req *NotifyReq, reply *RpcOkay) error {
 /* 
 RPC handler
 
-successor transfer data to predecessor 
+us successor transfer data to predecessor 
 
 1. loop thru kv map to find data belongs to predecessor 
 2. rpc data to successor
@@ -149,7 +149,7 @@ func (node *Node) TransferKeys_Handler(req *TransferReq, reply *RpcOkay) error {
 	for k,v := range node.dataStore{
 		hashed_key := HashKey(k)
 		if BetweenRightIncl(hashed_key, req.PredId, req.FromId){ // FromId == successor 
-			Put_RPC(req.PredId, k, v)
+			Put_RPC(node.Predecessor, k, v)
 			delete(node.dataStore, k)
 		}
 	}
@@ -216,7 +216,7 @@ func (node *Node) ClosestPrecedingFinger_Handler(query *RemoteQuery, reply *IdRe
 		return err
 	}
 	
-	for (i = KEY_LENGTH, i > 0 , i--) {		
+	for i := KEY_LENGTH; i > 0; i-=1 {		
 		if BetweenRightIncl(node.FingerTable[i].Node.Id, node.Id, query.Id) {
 			if node.Predecessor == nil { // found new node's closest predecessor 
 				reply.Id = nil

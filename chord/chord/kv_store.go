@@ -19,7 +19,7 @@ import (
 func Get(node *Node, key string) (string, error) {
 	
 	dest_node, err := node.locate(key)
-	string value = Get_RPC(dest_node, key)
+	value := Get_RPC(dest_node, key)
 
 	return value, nil
 }
