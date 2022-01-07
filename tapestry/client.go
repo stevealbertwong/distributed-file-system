@@ -69,6 +69,12 @@ func (client *Client) Get(){
 }
 
 
+func (client *Client) Join(){
 
+
+
+
+	
+}
 
 
